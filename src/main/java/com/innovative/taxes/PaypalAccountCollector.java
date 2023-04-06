@@ -3,7 +3,6 @@ package com.innovative.taxes;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
-import java.io.Serializable;
 
 import org.apache.hadoop.shaded.org.apache.commons.lang3.StringUtils;
 import org.apache.log4j.Level;
@@ -12,54 +11,39 @@ import org.apache.log4j.Logger;
 import org.apache.spark.api.java.function.FilterFunction;
 import org.apache.spark.api.java.function.MapFunction;
 import org.apache.spark.sql.Column;
-import org.apache.spark.sql.ColumnName;
 import org.apache.spark.sql.Dataset;
 import org.apache.spark.sql.Encoders;
 import org.apache.spark.sql.Row;
 import org.apache.spark.sql.SparkSession;
-
+import java.io.Serializable;
 import com.innovative.taxes.beans.JPMDeductionsModel;
 import com.innovative.taxes.beans.SparkSessionMgr;
 
-public class BarclaysAccountCollator implements Serializable {
-
+public class PaypalAccountCollector implements Serializable {
 	/**
 	 * 
 	 */
-	private static final long serialVersionUID = 161218885568292865L;
-	/**
-	 * 
-	 */
-	private static Logger log = LogManager.getLogger(BarclaysAccountCollator.class);
+	private static final long serialVersionUID = -4163155203500847335L;
+	private static Logger log = LogManager.getLogger(PaypalAccountCollector.class);
 	SparkSession sess = null;
 	SparkSessionMgr mgr = new SparkSessionMgr();
 	final String path1 = "D:\\Innovative Expenses\\2022filing\\summaries\\Result.csv";
-	final String dir = "D:\\Innovative Expenses\\2022filing\\allCardsSummary\\barclays";
-	final String[] bofaChkg = new String[] { "D:\\Innovative Expenses\\2022filing\\barclays\\2855.csv" };
-	final String group = "Grouped1.csv";
-	int acntIndx = 4;
-	boolean start = false;
+	final String dir = "D:\\Innovative Expenses\\2022filing\\allCardsSummary\\paypal";
+	final String[] bofaChkg = new String[] { "D:\\Innovative Expenses\\2022filing\\paypal\\paypal.csv" };
 
+	final String group = "Grouped1.csv";
+	int acntIndx = -1;
+	
 	public void groupAndSave() {
 		sess = mgr.getSession();
 		Dataset<Row> lines = sess.read().csv(bofaChkg);
-		String metaDta = "Transaction Merchant  Name or Transaction Description $ Amount";
 		lines = lines.filter(new FilterFunction<Row>() {
 			private static final long serialVersionUID = 1L;
 
 			@Override
 			public boolean call(Row value) throws Exception {
-				if (value != null && StringUtils.isNotEmpty(value.mkString()) && value.mkString().length() > 2) {
-					if (String.valueOf(value).contains("Purchase Activity for PRAKASH KAPILA")) {
-						start = true;
-						return false;
-					}
-					if (String.valueOf(value).contains("Total purchase activity")) {
-						start = false;
-					}
-				} else
-					return false;
-				return start;
+				return value != null && StringUtils.isNotEmpty(value.mkString()) && value.mkString().length() > 2
+						&& !value.mkString().startsWith("Reading");
 			}
 		});
 		lines.show();
@@ -67,7 +51,7 @@ public class BarclaysAccountCollator implements Serializable {
 		Dataset<JPMDeductionsModel> model = lines.map(new MapFunction<Row, JPMDeductionsModel>() {
 			private static final long serialVersionUID = 1L;
 
-			private boolean checkAccount(String acnt) {
+			private boolean checkForNumber(String acnt) {
 				char[] chrs = acnt.toCharArray();
 				for (int i = 0; i < chrs.length; i++) {
 					if (Character.isDigit(chrs[i])) {
@@ -85,34 +69,28 @@ public class BarclaysAccountCollator implements Serializable {
 				if (vals.length < 2)
 					return null;
 				String amt = vals[vals.length - 1];
-				if (vals.length <= acntIndx + 1 || StringUtils.isEmpty(amt) || amt.contains("DC")) {
+				if (StringUtils.isEmpty(amt) || checkForNumber(amt)) {
+					amt = "0.00";
 					log.info("Strop here" + value);
 				}
 				mod.setAmount(Double.valueOf(amt));
 				mod.setTranDate(vals[0].replace("[", ""));
 				String str = "";
 				if (acntIndx == -1) {
-					acntIndx = checkAccount(vals[1]) ? 1 : 2;
+					acntIndx = checkForNumber(vals[1]) ? 1 : 2;
 				}
-
-				for (int i = 1; i < vals.length; i++) {
-					if (StringUtils.isNotBlank(vals[i])) {
-						str += vals[i] + ",";
-						if (StringUtils.isEmpty(mod.getAccount()))
-							mod.setAccount(vals[acntIndx] + " " + vals[acntIndx + 1]);
-					}
-				}
+				mod.setAccount(vals[acntIndx]);	
+				mod.setAccount(vals[0].replace(":", "").replace("\r", "").replace("-", ""));
 				mod.setDesc(str);
 				return mod;
 			}
 		}, Encoders.bean(JPMDeductionsModel.class));
 
 		model.show();
-		model.filter(new Column("amount").isNull()).show();
-		Dataset<Row> groupSum = model.filter(new Column("amount").isNotNull()).groupBy("account").sum("amount");
-		groupSum.show();
-		Dataset<Row> groupSumDet = groupSum.join(model.select(new Column("desc"), new Column("account")).distinct(), "account");
-		 
+		Dataset<Row> groupSum = model.groupBy("account").sum("amount");
+	//	groupSum.show();
+		Dataset<Row> groupSumDet = groupSum.join(model, "account");
+		groupSumDet.show();
 		log.info("Total recs to save" + groupSumDet.count());
 		saveGroup(groupSum, group);
 	}
@@ -121,7 +99,8 @@ public class BarclaysAccountCollator implements Serializable {
 
 	private void saveGroup(Dataset<Row> rows1, String filename) {
 
-		Dataset<Row> rows = rows1.dropDuplicates(new String[]{"account"}).coalesce(1);
+		Dataset<Row> rows = rows1.coalesce(1);
+		rows.show();
 		File f = new File(dir + filename);
 
 		try {
@@ -138,20 +117,20 @@ public class BarclaysAccountCollator implements Serializable {
 			}
 			row += "\n";
 			fw.write(row);
+			fw.flush();
 		});
 		try {
-			fw.flush();
+			
 			fw.close();
 		} catch (IOException e) {
 
 			e.printStackTrace();
 			log.info(e.getMessage());
 		}
-		log.info("saved File"+f.getAbsolutePath());
 	}
 
 	public static void main(String arg[]) {
-		BarclaysAccountCollator acc = new BarclaysAccountCollator();
+		PaypalAccountCollector acc = new PaypalAccountCollector();
 		log.getLogger("org").setLevel(Level.ERROR);
 		log.getLogger("com.innovative").setLevel(Level.ALL);
 		// log.getLogger("akka").setLevel(Level.OFF);
