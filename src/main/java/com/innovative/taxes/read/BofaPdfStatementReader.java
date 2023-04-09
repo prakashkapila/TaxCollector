@@ -6,6 +6,8 @@ import java.io.IOException;
 import java.util.List;
 
 import org.apache.commons.lang3.StringUtils;
+import org.apache.log4j.BasicConfigurator;
+import org.apache.log4j.ConsoleAppender;
 import org.apache.log4j.LogManager;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
@@ -52,10 +54,11 @@ public class BofaPdfStatementReader extends PdfReader{
 				start = start ==0 ? i-1:start;
 				start = StringUtils.isEmpty(ret[start])?i-2:start;
 				ret[start]=ret[start].substring(0, ret[start].length()-1)+" "+lines[i];
+				ret[start]=ret[start].replace("continued on the next page","").replace("\r", "");
 			}
 			else {
 				start = start >0?0:start;
-				ret[i]=lines[i];
+				ret[i]=lines[i].replace("\r", "");
 			}
 		}
 		ret = removeNulls(ret);
@@ -69,10 +72,10 @@ public class BofaPdfStatementReader extends PdfReader{
 		{
 			if(alllines[i].startsWith("Total withdrawals")) {
 				end = i;
-				log.info("Breaking End is "+end);
+				System.out.println("Breaking End is "+end);
 				break;
 			}
-			
+			alllines[i] = alllines[i].replace(",", "");
 		}
 		String subset[] =  Arrays.copyOfRange(alllines, 0, end + 1);
 		return subset;
@@ -89,10 +92,10 @@ public class BofaPdfStatementReader extends PdfReader{
 		}
 	private int getEndIndex(String[] allLines, int start) {
 		for (int i = start; i < allLines.length; i++) {
-			if (allLines[i].startsWith("Interest Charge")) {
+			if (allLines[i].contains("TOTAL INTEREST CHARGED")) {
 				start = i;
 			}
-			else if (debit) {
+			else if (allLines[i].contains("Total withdrawals and other subtractions")) {
 				start = allLines.length -1;
 				break;
 			}
@@ -108,11 +111,12 @@ public class BofaPdfStatementReader extends PdfReader{
 		this.startIndexStr = startIndexStr;
 	}
 	private int getStartIndex(String[] allLines ) {
-		int start = 0;
+		int start = -1;
 		int counter =count;
 		for (int i = 0; i < allLines.length; i++) {
 			if(debit) {
 				if (allLines[i].contains(startIndexStr)) {
+				
 					counter--;
 					if (counter <=0) {
 						start = i+2;
@@ -120,16 +124,37 @@ public class BofaPdfStatementReader extends PdfReader{
 					}
 				}	
 			}
-			if (allLines[i].startsWith("Purchases and Adjustments")) {
+			
+			if (allLines[i].contains("Purchases and Adjustments")) {
 				start = i;
 			}
 		}
 		return start;
 	}
 
+	private boolean ignore(String  line[])
+	{
+		String val = line[line.length-1];
+		try {
+			double vald= Double.parseDouble(val);
+			return vald <=0;
+		}catch(RuntimeException rne)
+		{
+			return false;
+		}
+	}
+	private boolean checkDoc(String line) {
+		return line.contains("Purchases and Adjustments $0.00");
+	}
 	public String[] getDocument(String text) {
+		if(checkDoc(text))
+			return null;
 		String[] lines = text.split("\n");
 		int start = getStartIndex(lines);
+		if(start <0 || ignore(lines[start].replace("\r", "").split(" ")))
+		{
+			return null;
+		}
 		int end = getEndIndex(lines, start);
 		 
 		String subset[] =  Arrays.copyOfRange(lines, start, end + 1);
@@ -167,11 +192,11 @@ public class BofaPdfStatementReader extends PdfReader{
 
 	public void storeFiles() {
 		try {
-		//	storeFile(9275, "BOFA");
-		//	storeFile(4848, "BOFA");
+			storeFile(9275, "BOFA");
+			storeFile(4848, "BOFA");
 			storeFile(5448, "BOFA");
 			storeFile(3045, "BOFA");
-			log.info("Completed storing files");
+			System.out.println("Completed storing files");
 		} catch (Exception esp) {
 			esp.printStackTrace();
 		}
@@ -199,8 +224,8 @@ String out="D:\\Innovative Expenses\\2022filing\\bofa\\?.csv";
 			files = getFiles("BOFA", 3045);
 			fil = new File(out.replace("?", "3045"));//new File("D:\\Innovative Expenses\\2022filing\\bofa\\3045.csv");
 			fil.createNewFile();
-			startIndexStr="Total deposits and other additions ";
-			count=1;
+			startIndexStr="Withdrawals and other subtractions";
+			count=2;
 			debit=true;
 			break;
 		}
@@ -216,6 +241,7 @@ String out="D:\\Innovative Expenses\\2022filing\\bofa\\?.csv";
 		}
 		if (files != null && files.length > 0) {
 			List<String> data = readCardData(files);
+			System.out.println("Writing content to"+fil.getAbsolutePath());
 			FileWriter fw = new FileWriter(fil);
 			data.forEach(line -> {
 				try {
@@ -227,10 +253,11 @@ String out="D:\\Innovative Expenses\\2022filing\\bofa\\?.csv";
 			fw.flush();
 			fw.close();
 		} else
-			log.info("No files for card" + card);
+			System.out.println("No files for card" + card);
 	}
 
 	public static void main(String ard[]) throws IOException {
+		BasicConfigurator.configure(new ConsoleAppender());
 		BofaPdfStatementReader reader = new BofaPdfStatementReader();
 	 	reader.storeFiles();
 	}

@@ -48,26 +48,7 @@ public class ChaseAccountCollator implements Serializable{
 	Dataset<Row> allLines = null;
 	SparkSession sess = null;
 	
-	public void collateAndSave() {
-		Dataset<Row> allSet = null;
-		Dataset<DeductionsModel> model = null;
-		for(String fil:path)
-		{
-			int type = Integer.valueOf(fil.split("_")[0]);
-		//	RecordReader.card=type;
-		 	Dataset<Row> lines= sess.read().text(dir+fil);//.as(Encoders.bean(DeductionsModel.class));
-			model = lines.map(new RecordReader(), Encoders.bean(DeductionsModel.class));
-			log.info(" grouping for file"+fil);
-			allSet = allSet== null ? model.select("account","amount"):
-				allSet.select("account","amount").union(model.select("account","amount"));
-			saveGroup(model.select("account","amount"),out);
-			log.info("total rows in Allset"+allSet.count());
-			log.info("total rows in model "+model.count()+" for file "+fil);
-			allSet.show();
-			allSet.cache();
-		}
-		
- 	  }
+
 	public void groupAndSave()
 	{
 		sess=mgr.getSession();
@@ -81,16 +62,38 @@ public class ChaseAccountCollator implements Serializable{
 			}
 		});
 		lines.show();
+		saveGroup(lines,group+"temp" );
 		Dataset<JPMDeductionsModel> model  = lines.map(new MapFunction<Row,JPMDeductionsModel>(){
 			private static final long serialVersionUID = 1L;
+			private String removeSpaces(String space)
+			{
+				space=space.replace("$", "").replace("[", "").replace("]", "").replace("\"","");
+				String[]spaces=space.split(" ");
+				StringBuilder sb = new StringBuilder();
+				for(int i=0;i<spaces.length;i++)
+				{
+					if(StringUtils.isEmpty(spaces[i].trim()))
+						continue;
+					sb.append(spaces[i]).append(" ");
+				}
+				
+				return sb.toString();
+			}
 			@Override
 			public JPMDeductionsModel call(Row value) throws Exception {
 				JPMDeductionsModel mod = new JPMDeductionsModel ();
-				String vals[] = String.valueOf(value).replace("$", "").replace("[", "").replace("]", "").replace("\"","").replace("(EXCHG RATE)", "").split(" ");
+				String val = removeSpaces(String.valueOf(value));
+				if(val.contains("EXCHG RATE"))
+					return null;
+				
+				String vals[] = val.split(" ");
+				if(val.contains("FOREIGN")) {
+					vals[1]= vals[vals.length-4]+vals[vals.length-3];
+				}
 				if(vals.length <2 )
 					return null;
 				String amt = vals[vals.length-1];
-				if(StringUtils.isEmpty(amt))
+				if(StringUtils.isEmpty(amt)||amt.contains("RUP"))
 						{
 					log.info("Strop here"+value);
 						}
@@ -106,19 +109,15 @@ public class ChaseAccountCollator implements Serializable{
 					}
 				}
 				mod.setDesc(str);
+				if(StringUtils.isEmpty(mod.getAccount())||StringUtils.isEmpty(mod.getAmount().toString()))
+					log.info("Stop here");
 				return mod;
 			}}, Encoders.bean(JPMDeductionsModel.class));
-	
-		model.show();
-		model.filter(new Column("amount").isNull()).show();
-		Dataset<Row> groupSum = model.filter(new Column("amount").isNotNull()).groupBy("account").sum("amount");
-		groupSum.show();
-		Dataset<Row> groupSumDet = groupSum.join(model.select(new Column("desc"),new Column("account")),"account");
-		groupSumDet.show(); 
-		log.info("Total recs to save"+groupSumDet.count());
-		saveGroup(groupSum, group);
+		saveGroup(model, out);
+		
 	}
-	 private void saveGroup(Dataset<Row> rows,String filename) {
+	
+	 private void saveGroup(Dataset<?> rows,String filename) {
 		rows = rows.coalesce(1);
 		File f = new File(dir+filename);
 		
@@ -129,11 +128,19 @@ public class ChaseAccountCollator implements Serializable{
 			e.printStackTrace();
 		}
 		log.info("total rows to be saved are"+rows.count());
-		rows.foreach(func->{
+		rows.foreach(funcs->{
 			String row = "";
+			if(funcs instanceof Row)
+			{
+				Row func = (Row)funcs;
 			for (int i=0;i< func.length();i++)
 			{
 				row+=func.get(i)+(","); 
+			}
+			}
+			else if(funcs instanceof JPMDeductionsModel)
+			{
+				row = ((JPMDeductionsModel)funcs).getAccount()+","+((JPMDeductionsModel)funcs).getAmount();
 			}
 			row+="\n";
 			fw.write(row);

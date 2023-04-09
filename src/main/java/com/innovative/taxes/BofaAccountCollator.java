@@ -16,6 +16,8 @@ import org.apache.spark.sql.Encoders;
 import org.apache.spark.sql.Row;
 import org.apache.spark.sql.SparkSession;
 import java.io.Serializable;
+import java.util.Arrays;
+
 import com.innovative.taxes.beans.JPMDeductionsModel;
 import com.innovative.taxes.beans.SparkSessionMgr;
 
@@ -35,13 +37,12 @@ public class BofaAccountCollator implements Serializable {
 				"D:\\Innovative Expenses\\2022filing\\bofa\\9275.csv"
 			};
 
-	final String group="Grouped1.csv";
-	int acntIndx=-1;
+	final String group="Grouped3.csv";
+
 	public void groupAndSave()
 	{
 		sess=mgr.getSession();
 		Dataset<Row> lines = sess.read().csv(bofaChkg);
-		String metaDta ="Transaction Merchant  Name or Transaction Description $ Amount";
 		lines = lines.filter(new FilterFunction<Row>() {
 			private static final long serialVersionUID = 1L;
 			@Override
@@ -50,57 +51,16 @@ public class BofaAccountCollator implements Serializable {
 			}
 		});
 		lines.show();
-		
-		Dataset<JPMDeductionsModel> model  = lines.map(new MapFunction<Row,JPMDeductionsModel>(){
-			private static final long serialVersionUID = 1L;
-			private boolean checkAccount(String acnt)
-			{
-				char[] chrs = acnt.toCharArray();
-				for(int i=0;i<chrs.length;i++)
-				{
-					if(Character.isDigit(chrs[i])) {
-						return false;
-					}
-				}
-				return true;
-			}
-			@Override
-			public JPMDeductionsModel call(Row value) throws Exception {
-				JPMDeductionsModel mod = new JPMDeductionsModel ();
-				String vals[] = String.valueOf(value).replace("$", "").replace("[", "").replace("]", "").replace("\"","").replace("(EXCHG RATE)", "").split(" ");
-				if(vals.length <2 )
-					return null;
-				String amt = vals[vals.length-1];
-				if(StringUtils.isEmpty(amt)||amt.contains("DC"))
-						{
-					log.info("Strop here"+value);
-						}
-				mod.setAmount(Double.valueOf(amt));
-				mod.setTranDate(vals[0].replace("[", ""));
-				String str= "";
-				if(acntIndx==-1) { 
-					acntIndx=checkAccount(vals[1])?1:2;
-				}
-					
-				for(int i=1;i<vals.length;i++)
-				{
-					if(StringUtils.isNotBlank(vals[i])) {
-						str += vals[i]+",";
-						if(StringUtils.isEmpty(mod.getAccount()))
-							mod.setAccount(vals[acntIndx]);
-					}
-				}
-				mod.setDesc(str);
-				return mod;
-			}}, Encoders.bean(JPMDeductionsModel.class));
-	
-		model.show();
-		model.filter(new Column("amount").isNull()).show();
-		Dataset<Row> groupSum = model.filter(new Column("amount").isNotNull()).groupBy("account").sum("amount");
+		MapFunction<Row,JPMDeductionsModel> mapper = new BofaModelMapper(); 
+		Dataset<JPMDeductionsModel> model  = lines.map(mapper, Encoders.bean(JPMDeductionsModel.class));
+	 	model.show();
+		Dataset<Row> groupSum = model.groupBy(model.col("account")).sum("amount");
 		groupSum.show();
-		Dataset<Row> groupSumDet = groupSum.join(model.select(new Column("desc"),new Column("account")),"account");
-		groupSumDet.show(); 
-		log.info("Total recs to save"+groupSumDet.count());
+//		model.select(new Column("amount").isNull()).show();
+	
+	//	Dataset<Row> groupSumDet = groupSum.join(model.select(new Column("desc"),new Column("account")),"account");
+	//	groupSumDet.show(); 
+	//	log.info("Total recs to save"+groupSumDet.count());
 		saveGroup(groupSum, group);
 	}
 static 	FileWriter fw = null;
@@ -138,9 +98,63 @@ static 	FileWriter fw = null;
 		{
 			BofaAccountCollator acc = new BofaAccountCollator();
 			log.getLogger("org").setLevel(Level.ERROR);
-			log.getLogger("com.innovative").setLevel(Level.ALL);
+		//	log.getLogger("com.innovative").setLevel(Level.ALL);
 			//log.getLogger("akka").setLevel(Level.OFF);
 			//acc.collateAndSave();
 			acc.groupAndSave();
 		}
+}
+
+class BofaModelMapper implements MapFunction<Row,JPMDeductionsModel>{
+	 
+	private static final long serialVersionUID = 7140659695421277582L;
+	private static Logger log = LogManager.getLogger(BofaModelMapper.class);
+	JPMDeductionsModel mod;
+	int acntIndx=-1;
+	private boolean checkAccount(String acnt)
+	{
+		char[] chrs = acnt.toCharArray();
+		for(int i=0;i<chrs.length;i++)
+		{
+			if(Character.isDigit(chrs[i])) {
+				return false;
+			}
+		}
+		return true;
+	}
+	private String[] combineNulls(String vals)
+	{
+		vals = vals.replace(",null","");
+		vals =vals.replace("$", "").replace("[", "").replace("]", "").replace("\"","").replace("(EXCHG RATE)", "");
+		return vals.replace(","," ").split(" ");
+	}
+	@Override
+	public JPMDeductionsModel call(Row value) throws Exception {
+		JPMDeductionsModel mod = new JPMDeductionsModel ();
+		String vals[] = combineNulls(String.valueOf(value));
+		if(vals.length <2 )
+			return null;
+		String amt = vals[vals.length-1];
+		if(StringUtils.isEmpty(amt)||amt.contains("01/17")|| amt.contains("CO")||value.mkString().charAt(2)!='/')
+				{
+					log.info("Strop here"+value);
+				}
+		mod.setAmount(Double.valueOf(amt));
+		mod.setTranDate(vals[0].replace("[", ""));
+		String str= "";
+		if(acntIndx==-1) { 
+			acntIndx=checkAccount(vals[1])?1:2;
+		}
+			
+		for(int i=1;i<vals.length;i++)
+		{
+			if(StringUtils.isNotBlank(vals[i])) {
+				str += vals[i]+",";
+				if(StringUtils.isEmpty(mod.getAccount()))
+					mod.setAccount(vals[acntIndx]);
+			}
+		}
+		mod.setDesc(str);
+		return mod;
+	}
 }

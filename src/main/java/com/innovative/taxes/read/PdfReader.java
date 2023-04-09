@@ -21,6 +21,7 @@ public abstract class PdfReader {
 //	      //Retrieving text from PDF document
 		String text = pdfStripper.getText(document);
 		String[] texts = getDocument(text);
+
 		 //log.info(text);
 	//	System.out.println(text);
 		// Closing the document
@@ -30,11 +31,15 @@ public abstract class PdfReader {
 	}
 	public List<String> readCardData(File[] files) throws IOException {
 		List<String> data = new ArrayList<String>();
+		String[] filedata = null;
 		String str = "Reading file  ?";
 		for (File file : files) {
-			data.add(str.replace("?", file.getAbsolutePath()));
+			//data.add(str.replace("?", file.getAbsolutePath()));
 			log.info(str.replace("?", file.getAbsolutePath()));
-			data.addAll(Arrays.asList(read(file)));
+			filedata  =read(file);
+			if(filedata !=null) {
+				data.addAll(Arrays.asList(filedata));
+			}
 		}
 		data.forEach(x -> System.out.println(x));
 		return data;

@@ -46,7 +46,6 @@ public class BarclaysAccountCollator implements Serializable {
 		String metaDta = "Transaction Merchant  Name or Transaction Description $ Amount";
 		lines = lines.filter(new FilterFunction<Row>() {
 			private static final long serialVersionUID = 1L;
-
 			@Override
 			public boolean call(Row value) throws Exception {
 				if (value != null && StringUtils.isNotEmpty(value.mkString()) && value.mkString().length() > 2) {
@@ -89,7 +88,7 @@ public class BarclaysAccountCollator implements Serializable {
 					log.info("Strop here" + value);
 				}
 				mod.setAmount(Double.valueOf(amt));
-				mod.setTranDate(vals[0].replace("[", ""));
+				mod.setTranDate(vals[0].replace("[", "")+vals[1]);
 				String str = "";
 				if (acntIndx == -1) {
 					acntIndx = checkAccount(vals[1]) ? 1 : 2;
@@ -99,10 +98,11 @@ public class BarclaysAccountCollator implements Serializable {
 					if (StringUtils.isNotBlank(vals[i])) {
 						str += vals[i] + ",";
 						if (StringUtils.isEmpty(mod.getAccount()))
-							mod.setAccount(vals[acntIndx] + " " + vals[acntIndx + 1]);
+							mod.setAccount(vals[acntIndx] );
 					}
 				}
 				mod.setDesc(str);
+				
 				return mod;
 			}
 		}, Encoders.bean(JPMDeductionsModel.class));
